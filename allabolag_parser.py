@@ -12,7 +12,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 # === КОНФИГУРАЦИЯ ===
 OUTPUT_FILE = "org_numbers.txt"
-MAX_PAGES = 50
+MAX_PAGES = 500
 
 
 # === НАСТРОЙКА DRIVER ===
