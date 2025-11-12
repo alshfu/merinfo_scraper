@@ -11,7 +11,7 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException,
 from webdriver_manager.chrome import ChromeDriverManager
 
 # === КОНФИГУРАЦИЯ ===
-OUTPUT_FILE = "org_numbers.txt"
+OUTPUT_FILE = "org_numbers_bil.txt"
 MAX_PAGES = 500
 
 
@@ -21,11 +21,11 @@ def setup_driver():
 
     # --- Проблема с расширением ---
     # Загрузка расширения по абсолютному пути -- очень ненадежный метод.
-    # Версия в пути (3.50.6_0) может измениться, и тогда все сломается.
+    # Версия в пути (hoxx) может измениться, и тогда все сломается.
     # Лучше установить расширение в отдельный профиль Chrome и использовать его.
     # Пока что этот код закомментирован, чтобы не вызывать ошибок.
     #
-    # EXTENSION_PATH = "/Users/al_sh/Library/Application Support/Google/Chrome/Default/Extensions/nbcojefnccbanplpoffopkoepjmhgdgh/3.50.6_0"
+    # EXTENSION_PATH = "/Users/al_sh/Library/Application Support/Google/Chrome/Default/Extensions/nbcojefnccbanplpoffopkoepjmhgdgh/hoxx"
     # options.add_argument(f"--load-extension={EXTENSION_PATH}")
 
     # Остальные настройки

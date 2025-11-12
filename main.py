@@ -13,9 +13,10 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException,
 from webdriver_manager.chrome import ChromeDriverManager
 
 # === КОНФИГУРАЦИЯ ===
-ORG_NUMBERS_FILE = "org_numbers.txt"
-OUTPUT_FILE = "merinfo_complete_bygg.jsonl"
-HOXX_EXTENSION_PATH = "Hoxx-chrome.crx" # Путь к вашему .crx файлу
+ORG_NUMBERS_FILE = "org_numbers_bil.txt"
+OUTPUT_FILE = "data/merinfo_complete_bil.jsonl"
+# Путь к РАСПАКОВАННОЙ папке с расширением.
+HOXX_EXTENSION_DIR = "extensions/hoxx"
 
 
 # === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
@@ -66,11 +67,12 @@ def setup_driver():
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.page_load_strategy = 'eager'
-    
-    if os.path.exists(HOXX_EXTENSION_PATH):
-        options.add_extension(HOXX_EXTENSION_PATH)
+
+    # Загрузка распакованного расширения
+    if os.path.isdir(HOXX_EXTENSION_DIR):
+        options.add_argument(f"--load-extension={os.path.abspath(HOXX_EXTENSION_DIR)}")
     else:
-        print(f"   [!] ВНИМАНИЕ: Файл расширения {HOXX_EXTENSION_PATH} не найден.")
+        print(f"   [!] ВНИМАНИЕ: Папка с расширением {HOXX_EXTENSION_DIR} не найдена.")
 
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     return driver
@@ -81,7 +83,7 @@ def remove_org_number(org_number_to_remove):
     try:
         with open(ORG_NUMBERS_FILE, 'r', encoding='utf-8') as f:
             lines = f.readlines()
-        
+
         with open(ORG_NUMBERS_FILE, 'w', encoding='utf-8') as f:
             for line in lines:
                 if line.strip() != org_number_to_remove:
@@ -206,7 +208,7 @@ def process_company(driver, company_url):
                 driver.back()
                 wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "h1 span.namn")))
                 person_found = True
-                break 
+                break
             except NoSuchElementException: continue
         if not person_found: print("   [i] Ключевая персона не найдена в таблице.")
     except Exception as e:
@@ -245,34 +247,28 @@ def main():
                 time.sleep(random.uniform(1.0, 2.5))
                 driver.get(search_url)
 
-                # Проверка на страницу "Oops, du har sökt för mycket!"
+                # Проверка на страницу "Oops, din sökgräns är nådd!"
                 try:
-                    search_limit_element = driver.find_element(By.XPATH, "//div[contains(text(), 'Oops, du har sökt för mycket!')]")
-                    print(f"   [!] Достигнут лимит поиска. Перезапускаю браузер.")
+                    limit_page_element = driver.find_element(By.XPATH, "//div[contains(text(), 'Oops, din sökgräns är nådd!')]")
+                    print("   [!] Достигнут лимит поиска. Перезапускаю браузер.")
                     if driver:
                         try:
                             driver.quit()
                         except Exception as quit_e:
                             print(f"   [!] Ошибка при попытке закрыть браузер: {quit_e}")
                     driver = None
-                    time.sleep(5) # Короткая пауза перед перезапуском
-                    continue # Переходим к следующей итерации, которая запустит новый драйвер
+                    time.sleep(5)  # Короткая пауза перед перезапуском
+                    continue  # Переходим к следующей итерации, которая запустит новый драйвер
                 except NoSuchElementException:
-                    pass # Не страница лимита поиска, продолжаем как обычно
+                    pass  # Не страница лимита поиска, продолжаем как обычно
 
                 target_card_xpath = f"//div[contains(@class, 'mi-shadow-dark-blue-20') and .//p[normalize-space()='{current_org_number}']]"
-                
-                try:
-                    target_element = wait.until(EC.presence_of_element_located((By.XPATH, target_card_xpath)))
-                except TimeoutException:
-                    print(f"   [SKIP] Не найдено компании с номером {current_org_number} на странице (тайм-аут). Пропускаем.")
-                    remove_org_number(current_org_number)
-                    continue
+                target_element = wait.until(EC.presence_of_element_located((By.XPATH, target_card_xpath)))
 
                 try:
                     warning_xpath = ".//span[contains(@class, 'mi-text-red') and contains(text(), 'Information! Det finns något att anmärka på')]"
                     target_element.find_element(By.XPATH, warning_xpath)
-                    
+
                     company_name = target_element.find_element(By.CSS_SELECTOR, "a[href*='/foretag/']").text
                     print(f"   [SKIP] Компания '{company_name}' имеет пометку 'anmärka på'. Пропускаем.")
                     remove_org_number(current_org_number)
@@ -283,9 +279,9 @@ def main():
                 company_link_element = target_element.find_element(By.CSS_SELECTOR, "a[href*='/foretag/']")
                 company_url = company_link_element.get_attribute("href")
                 print(f"Найдена компания: {company_url.split('/')[-2]}")
-                
+
                 data = process_company(driver, company_url)
-                
+
                 if data.get('company', {}).get('name'):
                     save_record(data)
                     remove_org_number(current_org_number)
@@ -309,7 +305,7 @@ def main():
                 driver = None
                 time.sleep(5) # Коротка пауза перед перезапуском
                 continue
-            
+
             except KeyboardInterrupt:
                 print("\n🛑 Стоп.")
                 break
