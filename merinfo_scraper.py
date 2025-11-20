@@ -12,17 +12,18 @@ import json
 import re
 import os
 import random
+import sys
+import select
 
 # === CONFIGURATION ===
-ORG_NUMBERS_FILE = "asistans_org.txt"
-OUTPUT_FILE = "data/mer_info_complete_assistant.jsonl"
-HOXX_EXTENSION_URL = "https://chromewebstore.google.com/detail/hoxx-vpn-proxy/nbcojefnccbanplpoffopkoepjmhgdgh?utm_source=ext_app_menu"
-HOXX_LOGIN_URL = "https://account1.hoxx.com/start/login"
+ORG_NUMBERS_FILE = "org_numbers_bil.txt"
+OUTPUT_FILE = "mer_info_complett.jsonl"
 
 
 def setup_driver():
     """Konfigurerar och startar Chrome Driver för macOS"""
     chrome_options = Options()
+    # chrome_options.add_argument("--headless") # Avkommentera om du inte vill se webbläsaren
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36")
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
@@ -317,7 +318,15 @@ def main():
                 print(f"   [!] Ingen data samlades in för {current_org_nr}, markeras med E.")
                 mark_org_number(current_org_nr, 'E')
 
-            time.sleep(random.uniform(1.5, 3.0))
+            # Paus med möjlighet att avbryta
+            print("\n⏳ Pausar i 5 sekunder... Tryck Enter för att pausa helt.", end='', flush=True)
+            r, _, _ = select.select([sys.stdin], [], [], 5)
+            if r:
+                input() # Väntar på ett andra Enter för att fortsätta
+                print("   Fortsätter...")
+            else:
+                print("\n   Fortsätter automatiskt...")
+
 
         except (TimeoutException, WebDriverException) as e:
             print(f"   [!] Fel vid sidladdning eller webbläsarkommunikation: {e}")
