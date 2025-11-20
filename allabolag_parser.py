@@ -72,7 +72,7 @@ def main():
     wait = WebDriverWait(driver, 15)
 
     try:
-        driver.get("https://www.allabolag.se/segmentering")
+        driver.get("https://www.allabolag.se/segmentering?revenueFrom=-156393&revenueTo=500000&proffIndustryCode=10241778&profitFrom=-92557000&profitTo=50000")
 
         # --- Улучшенная пауза ---
         # Пауза реализована с помощью функции input().

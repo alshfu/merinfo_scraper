@@ -13,10 +13,11 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException,
 from webdriver_manager.chrome import ChromeDriverManager
 
 # === КОНФИГУРАЦИЯ ===
-ORG_NUMBERS_FILE = "org_numbers_bil.txt"
-OUTPUT_FILE = "data/merinfo_complete_bil.jsonl"
+ORG_NUMBERS_FILE = "asistans_org.txt"
+OUTPUT_FILE = "data/merinfo_complete_assistants.jsonl"
+
+
 # Путь к РАСПАКОВАННОЙ папке с расширением.
-HOXX_EXTENSION_DIR = "extensions/hoxx"
 
 
 # === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
@@ -67,13 +68,6 @@ def setup_driver():
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.page_load_strategy = 'eager'
-
-    # Загрузка распакованного расширения
-    if os.path.isdir(HOXX_EXTENSION_DIR):
-        options.add_argument(f"--load-extension={os.path.abspath(HOXX_EXTENSION_DIR)}")
-    else:
-        print(f"   [!] ВНИМАНИЕ: Папка с расширением {HOXX_EXTENSION_DIR} не найдена.")
-
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     return driver
 
@@ -110,12 +104,15 @@ def get_person_details(driver, person_url, role):
         wait = WebDriverWait(driver, 10)
         details['name'] = clean_text(wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "h1 span.namn"))).text)
         try:
-            age_text = driver.find_element(By.XPATH, "//i[contains(@class,'fa-address-book')]/following-sibling::span").text
+            age_text = driver.find_element(By.XPATH,
+                                           "//i[contains(@class,'fa-address-book')]/following-sibling::span").text
             details['age'] = int(re.search(r'\d+', age_text).group())
-        except: pass
+        except:
+            pass
         try:
             details['phone'] = clean_text(driver.find_element(By.CSS_SELECTOR, "a[href^='tel:']").text)
-        except: pass
+        except:
+            pass
         try:
             addr_full = clean_text(driver.find_element(By.CSS_SELECTOR, "#oversikt address").text)
             apt_match = re.search(r'lgh\s?(\d{4})', addr_full, re.IGNORECASE)
@@ -124,7 +121,8 @@ def get_person_details(driver, person_url, role):
             details['address']['street'] = street
             details['address']['postal_code'] = zip_code
             details['address']['city'] = city
-        except: pass
+        except:
+            pass
     except Exception as e:
         print(f"Ошибка персоны: {e}")
     return details
@@ -138,11 +136,14 @@ def process_company(driver, company_url):
     wait = WebDriverWait(driver, 10)
     final_data = {"company": {}, "contact": {}, "tax_info": {}, "financials": {}, "industry": {}, "board": []}
     try:
-        final_data['company']['name'] = clean_text(wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "h1 span.namn"))).text)
+        final_data['company']['name'] = clean_text(
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "h1 span.namn"))).text)
         try:
-            org_text = driver.find_element(By.XPATH, "//h1//i[contains(@class, 'fa-address-book')]/following-sibling::span").text
+            org_text = driver.find_element(By.XPATH,
+                                           "//h1//i[contains(@class, 'fa-address-book')]/following-sibling::span").text
             final_data['company']['org_number'] = clean_text(org_text)
-        except: pass
+        except:
+            pass
         final_data['company']['legal_form'] = get_table_value(driver, "Bolagsform:")
         final_data['company']['status'] = get_table_value(driver, "Status:")
         final_data['company']['registration_date'] = get_table_value(driver, "Registrerat:")
@@ -152,18 +153,22 @@ def process_company(driver, company_url):
             try:
                 date_el = remark_el.find_element(By.XPATH, "./following-sibling::span")
                 final_data['company']['remarks'] += " " + clean_text(date_el.text)
-            except: pass
-        except: final_data['company']['remarks'] = None
+            except:
+                pass
+        except:
+            final_data['company']['remarks'] = None
         try:
             phone_el = driver.find_element(By.CSS_SELECTOR, "a[href^='tel:']")
             final_data['contact']['phone'] = clean_text(phone_el.text)
-        except: pass
+        except:
+            pass
         try:
             addr_full = clean_text(driver.find_element(By.TAG_NAME, "address").text)
             addr_full = addr_full.replace(final_data['company']['name'], "").strip().strip(",")
             final_data['contact']['address'] = addr_full
             _, final_data['contact']['postal_code'], final_data['contact']['city'] = parse_address(addr_full)
-        except: pass
+        except:
+            pass
         final_data['contact']['municipality'] = get_table_value(driver, "Kommunsäte:")
         final_data['contact']['county'] = get_table_value(driver, "Länssäte:")
         f_skatt = get_table_value(driver, "F-Skatt:")
@@ -175,27 +180,35 @@ def process_company(driver, company_url):
         try:
             period_el = driver.find_element(By.XPATH, "//h3[contains(., 'Nyckeltal 20')]")
             final_data['financials']['period'] = period_el.text.replace("Nyckeltal ", "").strip()
-        except: pass
+        except:
+            pass
         final_data['financials']['currency'] = "SEK"
         final_data['financials']['revenue'] = get_financial_value(driver, "Omsättning")
         final_data['financials']['profit_after_financial_items'] = get_financial_value(driver, "Res. e. fin")
         final_data['financials']['net_profit'] = get_financial_value(driver, "Årets resultat")
         final_data['financials']['total_assets'] = get_financial_value(driver, "Summa tillgångar")
         try:
-            sni_full = driver.find_element(By.XPATH, "//h3[contains(., 'Svensk näringsgrensindelning')]/following-sibling::div").text.strip()
+            sni_full = driver.find_element(By.XPATH,
+                                           "//h3[contains(., 'Svensk näringsgrensindelning')]/following-sibling::div").text.strip()
             sni_parts = sni_full.split(" - ", 1)
             final_data['industry']['sni_code'] = sni_parts[0] if len(sni_parts) == 2 else None
             final_data['industry']['sni_description'] = sni_parts[1] if len(sni_parts) == 2 else sni_full
-        except: pass
+        except:
+            pass
         try:
-            categories = [clean_text(link.text) for link in driver.find_elements(By.XPATH, "//h3[contains(., 'Bransch')]/following-sibling::div//a")]
+            categories = [clean_text(link.text) for link in
+                          driver.find_elements(By.XPATH, "//h3[contains(., 'Bransch')]/following-sibling::div//a")]
             final_data['industry']['categories'] = categories
-        except: pass
+        except:
+            pass
         try:
-            desc_el = driver.find_element(By.XPATH, "//h3[contains(., 'Verksamhetsbeskrivning')]/following-sibling::div//div[contains(@class, 'expanded')]")
+            desc_el = driver.find_element(By.XPATH,
+                                          "//h3[contains(., 'Verksamhetsbeskrivning')]/following-sibling::div//div[contains(@class, 'expanded')]")
             final_data['industry']['activity_description'] = clean_text(desc_el.text)
-        except: pass
-        roles_to_check = ["VD", "Ordförande", "Styrelseledamot", "Ordinarie ledamot", "Innehavare", "Komplementär", "Likvidator"]
+        except:
+            pass
+        roles_to_check = ["VD", "Ordförande", "Styrelseledamot", "Ordinarie ledamot", "Innehavare", "Komplementär",
+                          "Likvidator"]
         person_found = False
         for role in roles_to_check:
             try:
@@ -209,7 +222,8 @@ def process_company(driver, company_url):
                 wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "h1 span.namn")))
                 person_found = True
                 break
-            except NoSuchElementException: continue
+            except NoSuchElementException:
+                continue
         if not person_found: print("   [i] Ключевая персона не найдена в таблице.")
     except Exception as e:
         print(f"   [!] Ошибка при сборе данных: {e}")
@@ -239,7 +253,8 @@ def main():
                 if driver is None:
                     driver = setup_driver()
                     driver.get("https://www.merinfo.se")
-                    print("\n🚦 ПАУЗА: Войдите в систему и настройте расширение (если требуется), затем нажмите ENTER здесь для старта.")
+                    print(
+                        "\n🚦 ПАУЗА: Войдите в систему и настройте расширение (если требуется), затем нажмите ENTER здесь для старта.")
                     input()
 
                 wait = WebDriverWait(driver, 20)
@@ -249,7 +264,8 @@ def main():
 
                 # Проверка на страницу "Oops, din sökgräns är nådd!"
                 try:
-                    limit_page_element = driver.find_element(By.XPATH, "//div[contains(text(), 'Oops, din sökgräns är nådd!')]")
+                    limit_page_element = driver.find_element(By.XPATH,
+                                                             "//div[contains(text(), 'Oops, din sökgräns är nådd!')]")
                     print("   [!] Достигнут лимит поиска. Перезапускаю браузер.")
                     if driver:
                         try:
@@ -303,7 +319,7 @@ def main():
                     except Exception as quit_e:
                         print(f"   [!] Ошибка при попытке закрыть браузер: {quit_e}")
                 driver = None
-                time.sleep(5) # Коротка пауза перед перезапуском
+                time.sleep(5)  # Коротка пауза перед перезапуском
                 continue
 
             except KeyboardInterrupt:
