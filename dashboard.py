@@ -300,7 +300,8 @@ def get_users_map():
     return out
 
 
-def build_query(search, county, form, status, industry, phone_filter):
+def build_query(search, county, form, status, industry, phone_filter,
+                bankgiro_filter=None, visited_mode=None, visited_orgs=None):
     conds = []
     if search:
         s = re.escape(search.strip())
@@ -320,6 +321,14 @@ def build_query(search, county, form, status, industry, phone_filter):
         conds.append(PHONE_OR)
     elif phone_filter == "without":
         conds.append({"$nor": [PHONE_OR]})
+    if bankgiro_filter == "with":
+        conds.append({"bankgiro": {"$nin": ["", None]}})
+    elif bankgiro_filter == "without":
+        conds.append({"bankgiro": {"$in": ["", None]}})
+    if visited_mode == "hide":
+        conds.append({"org_number": {"$nin": visited_orgs or []}})
+    elif visited_mode == "only":
+        conds.append({"org_number": {"$in": visited_orgs or []}})
     if not conds:
         return {}
     if len(conds) == 1:
@@ -357,14 +366,43 @@ def get_lead(org_number):
     return leads_col().find_one({"org_number": org_number})
 
 
-def leads_status_map(org_numbers):
-    """{org_number: status} för en lista av org.nr."""
+def leads_info_map(org_numbers):
+    """{org_number: {status, visited, has_note}} för en lista av org.nr."""
     out = {}
     for l in leads_col().find(
-        {"org_number": {"$in": org_numbers}}, {"org_number": 1, "status": 1}
+        {"org_number": {"$in": org_numbers}},
+        {"org_number": 1, "status": 1, "visited": 1, "notes": 1},
     ):
-        out[l["org_number"]] = l.get("status")
+        out[l["org_number"]] = {
+            "status": l.get("status"),
+            "visited": bool(l.get("visited")),
+            "has_note": bool((l.get("notes") or "").strip()),
+        }
     return out
+
+
+@st.cache_data(ttl=30)
+def get_visited_orgs():
+    """Lista med org.nr som markerats som besökta."""
+    return [l["org_number"] for l in
+            leads_col().find({"visited": True}, {"org_number": 1})]
+
+
+def set_visited(org_number, visited):
+    now = datetime.datetime.utcnow()
+    update = {"$set": {"visited": visited}, "$setOnInsert": {"created_at": now}}
+    if visited:
+        update["$set"]["visited_at"] = now
+    leads_col().update_one({"org_number": org_number}, update, upsert=True)
+
+
+def save_notes(org_number, notes):
+    now = datetime.datetime.utcnow()
+    leads_col().update_one(
+        {"org_number": org_number},
+        {"$set": {"notes": notes}, "$setOnInsert": {"created_at": now}},
+        upsert=True,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -591,19 +629,60 @@ def render_lead(doc):
 
 
 def render_detail(org_number):
-    if st.button("← Tillbaka till listan"):
-        st.session_state.selected_org = None
-        st.rerun()
-
     doc = companies_col().find_one({"org_number": org_number})
     if not doc:
+        if st.button("← Tillbaka till listan"):
+            st.session_state.selected_org = None
+            st.rerun()
         st.error("Företaget hittades inte.")
         return
 
     lead = get_lead(org_number)
-    if lead:
-        st.markdown("Lead-status: " + status_badge(lead.get("status", "NEW")),
-                    unsafe_allow_html=True)
+    visited = bool(lead and lead.get("visited"))
+
+    # Åtgärdsrad: tillbaka (till samma filtrerade lista) + markera besökt
+    a1, a2 = st.columns(2)
+    with a1:
+        if st.button("← Tillbaka till listan", width="stretch"):
+            st.session_state.selected_org = None
+            st.rerun()
+    with a2:
+        if visited:
+            if st.button("✓ Besökt — ångra", width="stretch"):
+                set_visited(org_number, False)
+                st.cache_data.clear()
+                st.rerun()
+        else:
+            if st.button("📍 Markera som besökt", width="stretch", type="primary"):
+                set_visited(org_number, True)
+                st.cache_data.clear()
+                st.rerun()
+
+    st.markdown(f"## {doc.get('name', '(namnlöst)')}")
+    header_badges = []
+    if visited:
+        header_badges.append(
+            "<span style='color:#16a34a;font-weight:600'>✓ Besökt</span>")
+    if lead and lead.get("status"):
+        header_badges.append(status_badge(lead["status"]))
+    if header_badges:
+        st.markdown(" · ".join(header_badges), unsafe_allow_html=True)
+
+    # Prominent anteckningsruta — så man vet att man haft kontakt
+    with st.container(border=True):
+        st.markdown("**📝 Viktiga anteckningar**")
+        nk = f"notes_{org_number}"
+        if nk not in st.session_state:
+            st.session_state[nk] = (lead.get("notes") if lead else "") or ""
+        st.text_area(
+            "Anteckningar", key=nk, label_visibility="collapsed", height=100,
+            placeholder="T.ex. 'Ringde 3/7, VD Anna intresserad, återkom nästa vecka'",
+        )
+        if st.button("💾 Spara anteckning", key=f"savenote_{org_number}"):
+            save_notes(org_number, st.session_state[nk])
+            st.cache_data.clear()
+            st.toast("Anteckning sparad ✓")
+            st.rerun()
 
     tabs = st.tabs(["🏢 Översikt", "📞 Telefonnummer", "📊 Ekonomi",
                     "👥 Styrelse & personer", "🎯 Lead / CRM"])
@@ -628,36 +707,57 @@ def sidebar_filters():
     industry_map = opts["industry_map"]
 
     st.sidebar.header("🔎 Sök & filter")
-    search = st.sidebar.text_input("Sök namn / org.nr")
+    search = st.sidebar.text_input("Sök namn / org.nr", key="f_search")
 
     st.sidebar.markdown("**🏭 Bransch**")
     industry_labels = st.sidebar.multiselect(
-        "Bransch", list(industry_map.keys()), label_visibility="collapsed")
+        "Bransch", list(industry_map.keys()),
+        label_visibility="collapsed", key="f_industry")
     industry = [industry_map[lbl] for lbl in industry_labels]
 
     st.sidebar.markdown("**📞 Telefon**")
     phone_choice = st.sidebar.radio(
         "Telefon", ["Alla", "Endast med telefon", "Endast utan telefon"],
-        label_visibility="collapsed",
+        label_visibility="collapsed", key="f_phone",
     )
     phone_filter = {"Alla": None, "Endast med telefon": "with",
                     "Endast utan telefon": "without"}[phone_choice]
 
-    with st.sidebar.expander("Fler filter"):
-        county = st.multiselect("Län", opts["county"])
-        form = st.multiselect("Bolagsform", opts["company_form"])
-        status = st.multiselect("Bolagsstatus", opts["status"])
+    st.sidebar.markdown("**🏦 Bankgiro**")
+    bg_choice = st.sidebar.radio(
+        "Bankgiro", ["Alla", "Endast med bankgiro", "Endast utan bankgiro"],
+        label_visibility="collapsed", key="f_bankgiro",
+    )
+    bankgiro_filter = {"Alla": None, "Endast med bankgiro": "with",
+                       "Endast utan bankgiro": "without"}[bg_choice]
 
-    sort_label = st.sidebar.selectbox("↕️ Sortera efter", list(SORT_OPTIONS.keys()))
+    st.sidebar.markdown("**✅ Besökta**")
+    visited_choice = st.sidebar.radio(
+        "Besökta", ["Visa alla", "Dölj besökta", "Endast besökta"],
+        label_visibility="collapsed", key="f_visited",
+    )
+    visited_mode = {"Visa alla": None, "Dölj besökta": "hide",
+                    "Endast besökta": "only"}[visited_choice]
+    visited_orgs = get_visited_orgs() if visited_mode else []
+
+    with st.sidebar.expander("Fler filter"):
+        county = st.multiselect("Län", opts["county"], key="f_county")
+        form = st.multiselect("Bolagsform", opts["company_form"], key="f_form")
+        status = st.multiselect("Bolagsstatus", opts["status"], key="f_status")
+
+    sort_label = st.sidebar.selectbox(
+        "↕️ Sortera efter", list(SORT_OPTIONS.keys()), key="f_sort")
     sort_field, sort_dir = SORT_OPTIONS[sort_label]
 
     filt_key = (search, tuple(county), tuple(form), tuple(status),
-                tuple(industry), phone_filter, sort_label)
+                tuple(industry), phone_filter, bankgiro_filter,
+                visited_mode, tuple(visited_orgs), sort_label)
     if filt_key != st.session_state.get("last_filter"):
         st.session_state.page = 0
         st.session_state.last_filter = filt_key
 
-    query = build_query(search, county, form, status, industry, phone_filter)
+    query = build_query(search, county, form, status, industry, phone_filter,
+                        bankgiro_filter, visited_mode, visited_orgs)
     return query, sort_field, sort_dir
 
 
@@ -679,6 +779,20 @@ def render_pagination(total):
             st.rerun()
 
 
+def list_badges(info):
+    """HTML-badges för en företagsrad: status, besökt, anteckning."""
+    if not info:
+        return ""
+    parts = []
+    if info.get("status"):
+        parts.append(status_badge(info["status"]))
+    if info.get("visited"):
+        parts.append("<span style='color:#16a34a;font-weight:600'>✓ Besökt</span>")
+    if info.get("has_note"):
+        parts.append("📝")
+    return " ".join(parts)
+
+
 def render_list(query, sort_field, sort_dir):
     results, total = search_companies(query, st.session_state.page, sort_field, sort_dir)
     st.subheader(f"Företag — {total:,}".replace(",", " ") + " träffar")
@@ -687,13 +801,12 @@ def render_list(query, sort_field, sort_dir):
         st.warning("Inga träffar.")
         return
 
-    lead_map = leads_status_map([r["org_number"] for r in results])
+    info_map = leads_info_map([r["org_number"] for r in results])
 
     for r in results:
         with st.container(border=True):
             phone_icon = "📞" if has_any_phone(r) else ""
-            lstat = lead_map.get(r["org_number"])
-            badge = status_badge(lstat) if lstat else ""
+            badge = list_badges(info_map.get(r["org_number"]))
             _, fin = latest_financials(r.get("financials"))
             oms = fin.get("Omsättning") if fin else None
             res = fin.get("Resultat efter finansnetto") if fin else None
@@ -732,15 +845,14 @@ def render_ringlista(query, sort_field, sort_dir):
         st.warning("Inga träffar.")
         return
 
-    lead_map = leads_status_map([r["org_number"] for r in results])
+    info_map = leads_info_map([r["org_number"] for r in results])
 
     for r in results:
         phones = collect_phones(r)
         with st.container(border=True):
             c1, c2 = st.columns([4, 1])
             with c1:
-                lstat = lead_map.get(r["org_number"])
-                badge = status_badge(lstat) if lstat else ""
+                badge = list_badges(info_map.get(r["org_number"]))
                 st.markdown(f"**{r.get('name', '—')}** {badge}",
                             unsafe_allow_html=True)
                 st.caption(f"{r.get('org_number', '')} · "
@@ -797,17 +909,22 @@ def main():
 
     st.divider()
 
+    # Filtren byggs ALLTID (även i detaljvyn) så att widget-state består —
+    # det gör att man backar tillbaka till exakt samma filtrerade lista.
+    query, sort_field, sort_dir = sidebar_filters()
+
     if st.session_state.selected_org:
         render_detail(st.session_state.selected_org)
         return
 
-    # Filter i sidopanelen — delas av båda vyerna
-    query, sort_field, sort_dir = sidebar_filters()
-
+    # Läge sparas i en egen session-nyckel (ej widget-key) så det överlever detaljvyn
+    modes = ["🏢 Företag", "📞 Ringlista"]
+    st.session_state.setdefault("view_mode", modes[0])
     mode = st.radio(
-        "Vy", ["🏢 Företag", "📞 Ringlista"],
+        "Vy", modes, index=modes.index(st.session_state.view_mode),
         horizontal=True, label_visibility="collapsed",
     )
+    st.session_state.view_mode = mode
     if mode == "📞 Ringlista":
         render_ringlista(query, sort_field, sort_dir)
     else:
