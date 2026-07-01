@@ -1,0 +1,6 @@
+pymongo>=4.15
+certifi
+bcrypt
+streamlit>=1.58
+pandas>=2.0
+plotly>=6.0

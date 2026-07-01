@@ -1,0 +1,13 @@
+# Secrets — MongoDB URI m.m.
+.streamlit/secrets.toml
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# IDE
+.idea/
+
+# Data (stora filer)
+*.jsonl
