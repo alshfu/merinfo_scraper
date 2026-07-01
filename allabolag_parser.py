@@ -2,161 +2,163 @@ import time
 import random
 import re
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.common.exceptions import (
+    TimeoutException,
+    NoSuchElementException,
+    StaleElementReferenceException
+)
 
-# === КОНФИГУРАЦИЯ ===
-OUTPUT_FILE = "org_numbers_bil.txt"
+# === CONFIGURATION ===
+OUTPUT_FILE = "org_numbers_kläder.txt"
 MAX_PAGES = 500
 
 
-# === НАСТРОЙКА DRIVER ===
 def setup_driver():
-    options = Options()
+    """Connect to already running Chrome with remote debugging enabled."""
+    print("Connecting to existing Chrome on 127.0.0.1:9222...")
 
-    # --- Проблема с расширением ---
-    # Загрузка расширения по абсолютному пути -- очень ненадежный метод.
-    # Версия в пути (hoxx) может измениться, и тогда все сломается.
-    # Лучше установить расширение в отдельный профиль Chrome и использовать его.
-    # Пока что этот код закомментирован, чтобы не вызывать ошибок.
-    #
-    # EXTENSION_PATH = "/Users/al_sh/Library/Application Support/Google/Chrome/Default/Extensions/nbcojefnccbanplpoffopkoepjmhgdgh/hoxx"
-    # options.add_argument(f"--load-extension={EXTENSION_PATH}")
+    options = webdriver.ChromeOptions()
+    options.add_experimental_option("debuggerAddress", "127.0.0.1:9222")
 
-    # Остальные настройки
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option('useAutomationExtension', False)
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.page_load_strategy = 'eager'
-
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    driver = webdriver.Chrome(options=options)
+    driver.set_page_load_timeout(60)
+    print("Driver connected successfully.")
     return driver
 
 
-def save_org_nr_to_file(org_nr):
-    """Добавляет орг. номер в файл."""
+def save_org_nr(org_nr: str):
+    """Save organization number to file."""
     try:
         with open(OUTPUT_FILE, "a", encoding="utf-8") as f:
             f.write(org_nr + "\n")
-        print(f"   [SAVE] {org_nr}")
+        print(f"   [SAVED] {org_nr}")
     except Exception as e:
-        print(f"   [ERROR] Не удалось сохранить: {e}")
+        print(f"   [ERROR] Could not save {org_nr}: {e}")
 
 
-def slow_scroll_to_bottom(driver):
-    """Плавная прокрутка страницы вниз для подгрузки элементов."""
-    print("   📉 Прокрутка страницы вниз...")
+def slow_scroll(driver):
+    """Smooth scroll to load all cards."""
+    print("   📉 Scrolling page...")
     last_height = driver.execute_script("return document.body.scrollHeight")
+
     while True:
-        driver.execute_script("window.scrollBy(0, 800);")
-        time.sleep(random.uniform(0.5, 1.0))
+        driver.execute_script("window.scrollBy(0, 900);")
+        time.sleep(random.uniform(0.6, 1.1))
+
         new_height = driver.execute_script("return document.body.scrollHeight")
-        current_scroll = driver.execute_script("return window.pageYOffset + window.innerHeight")
-        if current_scroll >= new_height:
+        current_position = driver.execute_script("return window.pageYOffset + window.innerHeight")
+
+        if current_position >= new_height - 50:
             break
         last_height = new_height
-    time.sleep(1)
+
+    time.sleep(1.2)
 
 
-# === ГЛАВНЫЙ ЦИКЛ ===
+def get_org_nr_from_card(card) -> str | None:
+    """Extract Org.nr from a card safely."""
+    try:
+        # Check if company is in liquidation
+        if card.find_elements(By.XPATH, ".//div[contains(text(), 'Likvidator')]"):
+            return None
+
+        # Find Org.nr text
+        org_element = card.find_element(
+            By.XPATH,
+            ".//span[contains(@class, 'CardHeader-propertyList') and contains(., 'Org.nr')]"
+        )
+        text = org_element.text
+
+        match = re.search(r"(\d{6}-\d{4})", text)
+        return match.group(1) if match else None
+
+    except (NoSuchElementException, StaleElementReferenceException):
+        return None
+    except Exception as e:
+        print(f"   [WARN] Error parsing card: {e}")
+        return None
+
+
 def main():
     driver = setup_driver()
     wait = WebDriverWait(driver, 15)
 
+    target_url = "https://www.allabolag.se/segmentering?revenueFrom=-156393&revenueTo=500000&proffIndustryCode=10241778&profitFrom=-92557000&profitTo=50000"
+
     try:
-        driver.get("https://www.allabolag.se/segmentering?revenueFrom=-156393&revenueTo=500000&proffIndustryCode=10241778&profitFrom=-92557000&profitTo=50000")
+        # Only navigate if we're not already on the target page
+        if target_url not in driver.current_url:
+            print("Navigating to Allabolag segmentation page...")
+            driver.get(target_url)
+            time.sleep(3)
 
-        # --- Улучшенная пауза ---
-        # Пауза реализована с помощью функции input().
-        # Скрипт остановится на этой строке и будет ждать, пока вы не нажмете Enter в консоли.
-        print("\n" + "="*60)
-        print("🚦 СКРИПТ НА ПАУЗЕ")
-        print("   1. Настройте фильтры на сайте Allabolag в открывшемся окне Chrome.")
-        print("   2. Дождитесь, когда появится список компаний.")
-        print("   3. Вернитесь в эту консоль и нажмите ENTER, чтобы начать сбор данных.")
-        print("="*60 + "\n")
-        input(">>> Нажмите ENTER для продолжения <<<")
-        print("\n🚀 Пауза снята, начинаю работу...")
+        # === MANUAL PAUSE ===
+        print("\n" + "=" * 65)
+        print("🚦 SCRIPT PAUSED")
+        print("   1. Set your filters on Allabolag in the Chrome window.")
+        print("   2. Wait until the list of companies appears.")
+        print("   3. Come back here and press ENTER to start scraping.")
+        print("=" * 65 + "\n")
+        input(">>> Press ENTER to continue <<<")
+        print("\n🚀 Starting scraper...\n")
 
+        page_num = 0
 
-        page_counter = 0
-        while page_counter < MAX_PAGES:
-            page_counter += 1
-            print(f"\n=== Обработка страницы {page_counter} ===")
+        while page_num < MAX_PAGES:
+            page_num += 1
+            print(f"=== Page {page_num} ===")
 
+            # Wait for cards to appear
             try:
-                wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.SegmentationSearchResultCard-card")))
+                wait.until(EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, "div.SegmentationSearchResultCard-card")
+                ))
             except TimeoutException:
-                print("🛑 Карточки не найдены (возможно, конец списка).")
+                print("🛑 No cards found. Possibly reached the end.")
                 break
 
-            slow_scroll_to_bottom(driver)
+            slow_scroll(driver)
 
             cards = driver.find_elements(By.CSS_SELECTOR, "div.SegmentationSearchResultCard-card")
-            print(f"Найдено карточек на странице: {len(cards)}")
+            print(f"Found {len(cards)} cards on this page")
 
+            saved_on_page = 0
             for card in cards:
-                try:
-                    # 1. Проверка на Ликвидатора
-                    is_liquidated = False
-                    try:
-                        if card.find_elements(By.XPATH,
-                                              ".//div[contains(@class, 'CardHeader-propertyHeader') and text()='Likvidator']"):
-                            is_liquidated = True
-                    except:
-                        pass
+                org_nr = get_org_nr_from_card(card)
+                if org_nr:
+                    save_org_nr(org_nr)
+                    saved_on_page += 1
 
-                    if not is_liquidated:
-                        # 2. Извлечение Org.nr
-                        # Ищем span, который содержит текст 'Org.nr'
-                        org_element = card.find_element(By.XPATH,
-                                                        ".//span[contains(@class, 'CardHeader-propertyList') and contains(., 'Org.nr')]")
-                        raw_text = org_element.text
+            print(f"Saved {saved_on_page} companies from page {page_num}")
 
-                        # Используем регулярное выражение для поиска формата XXXXXX-XXXX
-                        match = re.search(r"(\d{6}-\d{4})", raw_text)
-                        if match:
-                            org_nr = match.group(1)
-                            save_org_nr_to_file(org_nr)
-                        else:
-                            # Если вдруг формат отличается (редко, но бывает)
-                            print(f"   [WARN] Не удалось извлечь Org.nr из: {raw_text}")
-
-                except StaleElementReferenceException:
-                    continue
-                except NoSuchElementException:
-                    # Если у карточки нет Org.nr (странно, но возможно)
-                    continue
-                except Exception as e:
-                    print(f"   [ERROR] Ошибка карточки: {e}")
-                    continue
-
-            # Пагинация
+            # Pagination
             try:
-                next_button = driver.find_element(By.CSS_SELECTOR, "a[aria-label='Go to next page']")
-                if "Mui-disabled" in next_button.get_attribute("class"):
-                    print("\n🏁 Достигнута последняя страница.")
+                next_btn = driver.find_element(By.CSS_SELECTOR, "a[aria-label='Go to next page']")
+
+                if "Mui-disabled" in (next_btn.get_attribute("class") or ""):
+                    print("\n🏁 Reached the last page.")
                     break
-                print("➡ Переход на следующую страницу...")
-                driver.execute_script("arguments[0].click();", next_button)
-                time.sleep(random.uniform(3.0, 5.0))
+
+                print("➡️ Going to next page...")
+                driver.execute_script("arguments[0].click();", next_btn)
+                time.sleep(random.uniform(3.5, 5.5))
+
             except NoSuchElementException:
-                print("\n🏁 Кнопка 'Nästa' не найдена. Конец списка.")
+                print("\n🏁 No 'Next' button found. End of results.")
                 break
 
     except KeyboardInterrupt:
-        print("\n🛑 Скрипт остановлен.")
+        print("\n🛑 Script stopped by user.")
+    except Exception as e:
+        print(f"\n[ERROR] Unexpected error: {e}")
     finally:
-        driver.quit()
+        # Comment out the line below if you want to keep the browser open
+        # driver.quit()
+        print("\nScript finished.")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
