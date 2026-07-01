@@ -61,14 +61,21 @@ SORT_OPTIONS = {
 # CSS för mobilanpassning: stapla kolumner och kompaktare layout på små skärmar
 MOBILE_CSS = """
 <style>
+/* Större, touch-vänliga knappar (WCAG ~44px tap-yta) */
+.stButton button { min-height: 2.6rem; border-radius: 10px; font-weight: 600; }
+[data-testid="stMetricValue"] { font-size: 1.3rem; }
+a[href^='tel:'] { display: inline-block; padding: 3px 0; }
+
 @media (max-width: 640px) {
+  /* Stapla kolumner på mobil */
   [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 0.3rem !important; }
   [data-testid="stColumn"] { min-width: 100% !important; flex: 1 1 100% !important; }
   [data-testid="stMetricValue"] { font-size: 1.1rem !important; }
   h1 { font-size: 1.4rem !important; }
   .block-container { padding: 1rem 0.8rem !important; }
+  .stButton button { width: 100% !important; }
+  a[href^='tel:'] { font-size: 1.3rem !important; }
 }
-[data-testid="stMetricValue"] { font-size: 1.3rem; }
 </style>
 """
 
@@ -182,6 +189,53 @@ def fmt_phones(phones):
         else:
             out.append(str(p))
     return ", ".join(x for x in out if x) or "–"
+
+
+def norm_number(number):
+    """Rensar ett telefonnummer till tel:-format (endast siffror och +)."""
+    return re.sub(r"[^\d+]", "", str(number or ""))
+
+
+def tel_html(number, size="1.15rem"):
+    """Klickbar tap-to-call-länk (fungerar på mobil)."""
+    href = norm_number(number)
+    return (f"<a href='tel:{href}' style='font-size:{size};font-weight:600;"
+            f"text-decoration:none;color:#2563eb'>📞 {number}</a>")
+
+
+def collect_phones(doc):
+    """Alla nummer kopplade till företaget + personer. Deduplicerat.
+
+    Returnerar list av {number, name, source, meta}.
+    """
+    seen = set()
+    out = []
+
+    def add(number, name, source, meta=""):
+        key = norm_number(number)
+        if not key or key in seen:
+            return
+        seen.add(key)
+        out.append({"number": number, "name": name or "", "source": source, "meta": meta})
+
+    for p in doc.get("all_phones") or []:
+        if isinstance(p, dict):
+            bits = [x for x in (p.get("type"), p.get("operator"))
+                    if x and x not in ("Kontakta oss!", "")]
+            add(p.get("number"), p.get("user") or doc.get("name"),
+                "Företag", " · ".join(bits))
+        else:
+            add(p, doc.get("name"), "Företag")
+    add(doc.get("phone"), doc.get("name"), "Företag")
+
+    for m in doc.get("board_members") or []:
+        mname = m.get("name")
+        for p in (m.get("personal_data") or {}).get("phones") or []:
+            if isinstance(p, dict):
+                add(p.get("number"), p.get("user") or mname, "Styrelse")
+            else:
+                add(p, mname, "Styrelse")
+    return out
 
 
 def clean_industry(v):
@@ -420,7 +474,14 @@ def render_board(doc):
                 st.markdown("**Adress:** " + (pd_.get("address") or "–"))
                 st.markdown("**Civilstånd:** " + (pd_.get("civil_status") or "–"))
             with c2:
-                st.markdown("**Telefon:** " + fmt_phones(pd_.get("phones")))
+                phones = pd_.get("phones") or []
+                if phones:
+                    st.markdown("**Telefon:**")
+                    for p in phones:
+                        num = p.get("number") if isinstance(p, dict) else p
+                        st.markdown(tel_html(num), unsafe_allow_html=True)
+                else:
+                    st.markdown("**Telefon:** –")
                 vehicles = pd_.get("vehicles") or []
                 if vehicles:
                     st.markdown("**Fordon:**")
@@ -431,6 +492,21 @@ def render_board(doc):
             url = pd_.get("url") or m.get("profile_url")
             if url:
                 st.markdown(f"[🔗 Personprofil]({url})")
+
+
+def render_phones(doc):
+    """Alla telefonnummer kopplade till företaget — tap-to-call på mobil."""
+    phones = collect_phones(doc)
+    if not phones:
+        st.info("Inga telefonnummer hittades för detta företag.")
+        return
+    st.caption(f"{len(phones)} nummer — tryck på ett nummer för att ringa 📱")
+    for p in phones:
+        with st.container(border=True):
+            st.markdown(tel_html(p["number"], size="1.4rem"), unsafe_allow_html=True)
+            sub = " · ".join(x for x in [p["name"], p["source"], p["meta"]] if x)
+            if sub:
+                st.caption(sub)
 
 
 def render_lead(doc):
@@ -529,21 +605,25 @@ def render_detail(org_number):
         st.markdown("Lead-status: " + status_badge(lead.get("status", "NEW")),
                     unsafe_allow_html=True)
 
-    tabs = st.tabs(["🏢 Översikt", "📊 Ekonomi", "👥 Styrelse & personer", "🎯 Lead / CRM"])
+    tabs = st.tabs(["🏢 Översikt", "📞 Telefonnummer", "📊 Ekonomi",
+                    "👥 Styrelse & personer", "🎯 Lead / CRM"])
     with tabs[0]:
         render_overview(doc)
     with tabs[1]:
-        render_financials(doc)
+        render_phones(doc)
     with tabs[2]:
-        render_board(doc)
+        render_financials(doc)
     with tabs[3]:
+        render_board(doc)
+    with tabs[4]:
         render_lead(doc)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Vy: lista
 # ─────────────────────────────────────────────────────────────────────────────
-def render_list():
+def sidebar_filters():
+    """Bygger sidopanelens filter och returnerar (query, sort_field, sort_dir)."""
     opts = get_filter_options()
     industry_map = opts["industry_map"]
 
@@ -578,8 +658,29 @@ def render_list():
         st.session_state.last_filter = filt_key
 
     query = build_query(search, county, form, status, industry, phone_filter)
-    results, total = search_companies(query, st.session_state.page, sort_field, sort_dir)
+    return query, sort_field, sort_dir
 
+
+def render_pagination(total):
+    pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    pc1, pc2, pc3 = st.columns([1, 2, 1])
+    with pc1:
+        if st.session_state.page > 0 and st.button("◀ Föregående"):
+            st.session_state.page -= 1
+            st.rerun()
+    with pc2:
+        st.markdown(
+            f"<div style='text-align:center'>Sida {st.session_state.page + 1} / {pages}</div>",
+            unsafe_allow_html=True,
+        )
+    with pc3:
+        if st.session_state.page < pages - 1 and st.button("Nästa ▶"):
+            st.session_state.page += 1
+            st.rerun()
+
+
+def render_list(query, sort_field, sort_dir):
+    results, total = search_companies(query, st.session_state.page, sort_field, sort_dir)
     st.subheader(f"Företag — {total:,}".replace(",", " ") + " träffar")
 
     if not results:
@@ -617,22 +718,50 @@ def render_list():
                     st.session_state.selected_org = r["org_number"]
                     st.rerun()
 
-    # Paginering
-    pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
-    pc1, pc2, pc3 = st.columns([1, 2, 1])
-    with pc1:
-        if st.session_state.page > 0 and st.button("◀ Föregående"):
-            st.session_state.page -= 1
-            st.rerun()
-    with pc2:
-        st.markdown(
-            f"<div style='text-align:center'>Sida {st.session_state.page + 1} / {pages}</div>",
-            unsafe_allow_html=True,
-        )
-    with pc3:
-        if st.session_state.page < pages - 1 and st.button("Nästa ▶"):
-            st.session_state.page += 1
-            st.rerun()
+    render_pagination(total)
+
+
+def render_ringlista(query, sort_field, sort_dir):
+    """Ringlista: alla telefonnummer för de filtrerade företagen — tap-to-call."""
+    results, total = search_companies(query, st.session_state.page, sort_field, sort_dir)
+    st.subheader(f"📞 Ringlista — {total:,}".replace(",", " ") + " företag")
+    st.caption("Tips: aktivera filtret **Endast med telefon** i sidopanelen. "
+               "Tryck på ett nummer för att ringa.")
+
+    if not results:
+        st.warning("Inga träffar.")
+        return
+
+    lead_map = leads_status_map([r["org_number"] for r in results])
+
+    for r in results:
+        phones = collect_phones(r)
+        with st.container(border=True):
+            c1, c2 = st.columns([4, 1])
+            with c1:
+                lstat = lead_map.get(r["org_number"])
+                badge = status_badge(lstat) if lstat else ""
+                st.markdown(f"**{r.get('name', '—')}** {badge}",
+                            unsafe_allow_html=True)
+                st.caption(f"{r.get('org_number', '')} · "
+                           f"{clean_industry(r.get('industry')) or '–'}")
+            with c2:
+                if st.button("Öppna →", key="rl_" + r["org_number"],
+                             width="stretch"):
+                    st.session_state.selected_org = r["org_number"]
+                    st.rerun()
+            if phones:
+                for p in phones:
+                    sub = " · ".join(x for x in [p["name"], p["source"]] if x)
+                    st.markdown(
+                        tel_html(p["number"])
+                        + f" <span style='color:#64748b;font-size:0.85rem'>{sub}</span>",
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.caption("Inga nummer registrerade")
+
+    render_pagination(total)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -670,8 +799,19 @@ def main():
 
     if st.session_state.selected_org:
         render_detail(st.session_state.selected_org)
+        return
+
+    # Filter i sidopanelen — delas av båda vyerna
+    query, sort_field, sort_dir = sidebar_filters()
+
+    mode = st.radio(
+        "Vy", ["🏢 Företag", "📞 Ringlista"],
+        horizontal=True, label_visibility="collapsed",
+    )
+    if mode == "📞 Ringlista":
+        render_ringlista(query, sort_field, sort_dir)
     else:
-        render_list()
+        render_list(query, sort_field, sort_dir)
 
 
 if __name__ == "__main__":
