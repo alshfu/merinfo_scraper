@@ -367,15 +367,18 @@ def get_lead(org_number):
 
 
 def leads_info_map(org_numbers):
-    """{org_number: {status, visited, has_note}} för en lista av org.nr."""
+    """{org_number: {status, visited, visited_by, visited_at, has_note}}."""
     out = {}
     for l in leads_col().find(
         {"org_number": {"$in": org_numbers}},
-        {"org_number": 1, "status": 1, "visited": 1, "notes": 1},
+        {"org_number": 1, "status": 1, "visited": 1, "visited_by": 1,
+         "visited_at": 1, "notes": 1},
     ):
         out[l["org_number"]] = {
             "status": l.get("status"),
             "visited": bool(l.get("visited")),
+            "visited_by": l.get("visited_by"),
+            "visited_at": l.get("visited_at"),
             "has_note": bool((l.get("notes") or "").strip()),
         }
     return out
@@ -388,11 +391,13 @@ def get_visited_orgs():
             leads_col().find({"visited": True}, {"org_number": 1})]
 
 
-def set_visited(org_number, visited):
+def set_visited(org_number, visited, visited_by=None):
     now = datetime.datetime.utcnow()
     update = {"$set": {"visited": visited}, "$setOnInsert": {"created_at": now}}
     if visited:
         update["$set"]["visited_at"] = now
+        if visited_by:
+            update["$set"]["visited_by"] = visited_by
     leads_col().update_one({"org_number": org_number}, update, upsert=True)
 
 
@@ -654,15 +659,17 @@ def render_detail(org_number):
                 st.rerun()
         else:
             if st.button("📍 Markera som besökt", width="stretch", type="primary"):
-                set_visited(org_number, True)
+                who = (st.session_state.get("auth_user") or {}).get("full_name")
+                set_visited(org_number, True, who)
                 st.cache_data.clear()
                 st.rerun()
 
     st.markdown(f"## {doc.get('name', '(namnlöst)')}")
     header_badges = []
     if visited:
-        header_badges.append(
-            "<span style='color:#16a34a;font-weight:600'>✓ Besökt</span>")
+        header_badges.append(visited_label(
+            lead.get("visited_by") if lead else None,
+            lead.get("visited_at") if lead else None))
     if lead and lead.get("status"):
         header_badges.append(status_badge(lead["status"]))
     if header_badges:
@@ -779,6 +786,16 @@ def render_pagination(total):
             st.rerun()
 
 
+def visited_label(who, when):
+    """'✓ Besökt av Alex · 2026-07-01' — 'av' visas bara om namn finns."""
+    label = "✓ Besökt"
+    if who:
+        label += f" av {who}"
+    if isinstance(when, datetime.datetime):
+        label += f" · {when.strftime('%Y-%m-%d')}"
+    return f"<span style='color:#16a34a;font-weight:600'>{label}</span>"
+
+
 def list_badges(info):
     """HTML-badges för en företagsrad: status, besökt, anteckning."""
     if not info:
@@ -787,7 +804,7 @@ def list_badges(info):
     if info.get("status"):
         parts.append(status_badge(info["status"]))
     if info.get("visited"):
-        parts.append("<span style='color:#16a34a;font-weight:600'>✓ Besökt</span>")
+        parts.append(visited_label(info.get("visited_by"), info.get("visited_at")))
     if info.get("has_note"):
         parts.append("📝")
     return " ".join(parts)
